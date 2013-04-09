@@ -27,10 +27,14 @@ mvmt_TS <- function(timesteps,N_fish,sex,mean_dist,gender_diff,sensitivity, doma
         pos[pos[,t]>max(domain) ,t] <- rlnorm(length(pos[pos[,t]>max(domain) ,t]),log(t*100/timesteps),1)
       }
       
+      # can't properly use rbinom with a matrix, so use a workaround
+      detections=matrix(rbinom(N_fish*length(seq(0,max(domain),num_receivers)),1,1-pexp(sapply(pos[,t],function(x){abs(seq(0,max(domain),num_receivers)-x)}),r)),length(seq(0,max(domain),num_receivers)),N_fish)
+      det_pos[which(detections==1, arr.ind = T)[,2],t] = seq(min(domain),max(domain),num_receivers)[which(detections==1, arr.ind = T)[,1]]
+            
       } else {
         
         # weighted interpolation of temp
-       likes_int<-(likes[floor(pos[,t-1])+1,t]*(pos[,t-1]-floor(pos[,t-1]))+likes[ceil(pos[,t-1])+1,t]*(ceil(pos[,t-1])-pos[,t-1]))/2
+       likes_int<-(likes[floor(pos[,t-1])+1,t]*(pos[,t-1]-floor(pos[,t-1]))+likes[ceiling(pos[,t-1])+1,t]*(ceiling(pos[,t-1])-pos[,t-1]))/2
        signs <- sign(maxlike-pos[,t-1])
       
       pos[,t] <- pos[,t-1] + rnorm(N_fish,sensitivity*(likes[maxlike,t-1]-likes_int)*signs,mean_dist+sex*gender_diff) 
@@ -44,7 +48,7 @@ mvmt_TS <- function(timesteps,N_fish,sex,mean_dist,gender_diff,sensitivity, doma
        
       # can't properly use rbinom with a matrix, so use a workaround
       detections=matrix(rbinom(N_fish*length(seq(0,max(domain),num_receivers)),1,1-pexp(sapply(pos[,t],function(x){abs(seq(0,max(domain),num_receivers)-x)}),r)),length(seq(0,max(domain),num_receivers)),N_fish)
-      det_pos[which(detections==1, arr.ind = T)[,2],t] = seq(0,max(domain),num_receivers)[which(detections==1, arr.ind = T)[,1]]
+      det_pos[which(detections==1, arr.ind = T)[,2],t] = seq(min(domain),max(domain),num_receivers)[which(detections==1, arr.ind = T)[,1]]
       
     }
   }
@@ -76,101 +80,47 @@ gender_diff = mean_dist*rnorm(N_fish,0.5,0.3)
 
 # number of receivers along a linear coastline/river
 num_receivers = 10
-num_receivers = num_receivers-1 # because I use it for itnervals there'll be as many as chosen...
+num_receivers = num_receivers # because I use it for itnervals there'll be as many as chosen...
 # detection probability
-r = 0.5 
+r = 0.7
 
 # plot detection radius
-plot(seq(0,10,length.out=1000),1-pexp(seq(0,10,length.out=1000),0.5),ylab='proba',xlab='distance',t='l',col=1,lwd=2)
+plot(seq(0,10,length.out=1000),exp(-r * seq(0,10,length.out=1000)),ylab='proba',xlab='distance',t='l',col=1,lwd=2)
 
-domain = 0:100
+domain = 1:100
 
 mvmt <- mvmt_TS(timesteps,N_fish,sex,mean_dist,gender_diff,sensitivity, domain,num_receivers)
-  
-par(mfcol=c(3,1))
+ 
+
 k=5
+par(mfcol=c(1,1))
 # detected positions
-plot(mvmt$det_pos[k,],xlab='time',ylab='position')
+image(x=1:50-1,y=1:100,t(temp),xlab='time',ylab='position (river kilometer)')
+points(expand.grid(1:50,seq(1,100,10)))
+points(mvmt$det_pos[k,],pch=16)
 # actual positions
 lines(mvmt$pos[k,],lwd=2,col=(4-sex[k]))
-k=3
-plot(mvmt$det_pos[k,],xlab='time',ylab='position')
-lines(mvmt$pos[k,],lwd=2,col=(4-sex[k]))
-k=1
-plot(mvmt$det_pos[k,],xlab='time',ylab='position')
-lines(mvmt$pos[k,],lwd=2,col=(4-sex[k]))
 
-# Prepare Winbugs data -------------------------------
-require(R2WinBUGS)
-require(rjags)
-
-write.model(Movement_model, 'Movement_model.bug')
-#file.show('Movement_model.bug')
-Movement_model <- function(){
-  for(i in 1:N_fish){
-    
-    # 'meta-analytic' beta and sex effects
-    beta[i] ~ dnorm(mu_beta,tau_beta)
-   
-    
-    for(t in 2:T){
-      
-      # beta is essentially a 'regression' for the effect of temperature
-      means[i,t] <- pos[i,t-1] + beta[i]*temp_grad[i,t-1]
-      
-      # process model
-      pos[i,t] ~ dnorm(means[i,t],tau[sex[i]]) %_% I(domain[1],domain[2])
-      
-      # temp 'preference' at pos[i] relative to best position
-      rpos[i,t] <- round(pos[i,t])
-      
-      # now a gradient thanks to my little trick ! 
-      temp_grad[i, t] <-  1 - temp[rpos[i, t], t]
-      
-      # detection model
-      for (r in 1:n_rec){
-        dist[i,t,r] <- abs(r-pos[i,t])
-        # exponential detection model
-        p[i,t,r] <- lam*exp(-lam*dist[i,t,r])/lam
-        # measurement model
-        pos_det[r, t,i] ~ dbern(p[i, t, r])
-      }
-    }
-  }
-   
-  ##-- priors
-  
-  # sex specific variance
-  meansig ~ dlnorm(0,0.0001)
-  sig[1] <- meansig
-  sig[2]<- sex_diff*meansig
-  tau[1] <- 1/sig[1]
-  tau[2] <- 1/sig[2]
-  
-  sex_diff ~ dlnorm(mu_sex, tau_sex)
-  
-  mu_sex~ dnorm(0.00000E+00, 1.00000E-04)
-  
-  mu_beta ~ dnorm(0,0.0001) 
-  
-  tau_beta ~ dgamma(0.01,0.01)
-  tau_sex ~ dgamma(0.01,0.01)
-  
-  lam ~ dgamma(0.01,0.01)
-  
+for (k in 1:N_fish){
+#points(mvmt$det_pos[k,],xlab='time',ylab='position')
+lines(mvmt$pos[k,],lwd=2,col=(4-sex[k]))
 }
+
+# Prepare Jags data -------------------------------
+
+require(rjags)
 
 ## prepare data ---
 
 # we know where we tagged the fish....
-pos1 <- mvmt$pos/10+1
+pos1 <- mvmt$pos
 pos1[,2:ncol(pos1)] <- NA
 
 # need position of temp optimum
 maxtemp <- apply(mvmt$likes,2,which.max)
 
 # need receiver psoitions normalized to 1:num_receivers
-recs=11
+recs=10
 
 # detection positions
 
@@ -178,7 +128,7 @@ pos_det <- array(0,dim=c(recs,timesteps,N_fish))
 
 for (i in 1:N_fish){
   for (j in 1:timesteps){
-    pos_det[mvmt$det_pos[i,j]/10+1,j,i] <- 1}}
+    pos_det[(mvmt$det_pos[i,j]+9)/10,j,i] <- 1}}
 
 # initial temp_optimum gradient 
 temp_grad <- matrix(NA,N_fish,timesteps)
@@ -191,12 +141,12 @@ temp=mvmt$likes
 for (t in 1:timesteps){
   temp[(maxtemp[t]+1):nrow(temp),t] <- 1+(1-temp[(maxtemp[t]+1):nrow(temp),t])}
 
-mvmt_data <- list(pos_det=pos_det,sex=sex+1,pos=pos1,N_fish=N_fish,T=timesteps,n_rec=recs,domain=c(1,11),temp=temp,temp_grad=temp_grad)
+mvmt_data <- list(pos_det=pos_det,sex=sex+1,pos=pos1,N_fish=N_fish,rec_pos = seq(min(domain),max(domain),num_receivers),T=timesteps,n_rec=recs,domain=c(min(domain),max(domain)),temp=temp,temp_grad=temp_grad)
 
 ## prepare inits ---------------
 
 # initialize positions at actual positions....cheating but making sure that things work ok...
-pos.init <- mvmt$pos/10+1
+pos.init <- mvmt$pos
 pos.init[,1] <- NA
 
 sex_diff.init <- 1
@@ -212,34 +162,24 @@ mvmt_inits <- list(list(
   lam=0.7,
   meansig=1))
 
-# output parameters - 'pos_det' is not output since it is HUGE with jsut a moderate number of timesteps and iterations
+# output parameters - 'pos_det' is not output since it is HUGE with just a moderate number of timesteps and iterations
+mvmt_bugs = jags.model('Movement_model.bug',data=mvmt_data,inits=mvmt_inits,n.adapt=100)
+
 params = c('pos','mu_beta','meansig','sex_diff','lam')
 
-#main function to run winbugs-----------
-
-mvmt.mcmc <- bugs(data=mvmt_data,
-    inits=mvmt_inits,
-    parameters.to.save=params,
-    model.file='Movement_model.bug',
-    n.chains=1,
-    n.burnin=1000,
-    n.iter=2000,
-    bugs.directory = "C:\\Program Files (x86)\\WinBUGS14", # change this part - remove th x86 for non-64 bit systems
-    working.directory=getwd())
-
+mvmt_mcmc <- coda.samples(mvmt_bugs,variable.names=params,n.iter=10000,thin=10)
 
 # get chains for some parameters
-post_pos <- mvmt.mcmc$sims.list$pos
-mu_beta <- mvmt.mcmc$sims.list$mu_beta
-sex_diffs <- mvmt.mcmc$sims.list$sex_diff
-lam <- mvmt.mcmc$sims.list$lam
+post_pos <- mvmt_mcmc[[1]][,grep('pos',colnames((mvmt_mcmc[[1]])))]
+mu_beta <- mvmt_mcmc[[1]][,grep('mu_beta',colnames((mvmt_mcmc[[1]])))]
+sex_diffs <- mvmt_mcmc[[1]][,grep('sex_diff',colnames((mvmt_mcmc[[1]])))]
+lam <- mvmt_mcmc[[1]][,grep('lam',colnames((mvmt_mcmc[[1]])))]
 
 # plot posterior distributions
 par(mfcol=c(1,1))
-hist(mu_beta)
-hist(sex_diffs)
-hist(meansig)
-hist(lam)
+hist(mu_beta,xlab='temperature effect',main='')
+hist(sex_diffs,xlab='variance ratio female/male',main='')
+hist(lam,xlab=expression(lambda),main='')
 
 # p value of temp effect
 mean(mu_beta>0)
@@ -248,14 +188,14 @@ mean(mu_beta>0)
 mean(sex_diffs>1)
 
 # plot inferred, smoothed trajectories
-
+pos_ar <- array(post_pos,c(1000,N_fish,timesteps))
 plot_funct <- function (k) {
   
   # detected positions
   plot(mvmt$pos[k,],lwd=2,col=(4-sex[k]),xlab='time',ylab='position',t='l')
   
   for (i in seq(1,1000,10))
-  {lines((post_pos[i,k,])*10,lwd=1,col=2)}
+  {lines((pos_ar[i,k,]),lwd=1,col=2)}
   
   # detected positions
   points(mvmt$det_pos[k,])
@@ -263,7 +203,7 @@ plot_funct <- function (k) {
   lines(mvmt$pos[k,],lwd=2,col=(4-sex[k]))
 }
 
-plot_funct(4)
+plot_funct(8)
 
 
 

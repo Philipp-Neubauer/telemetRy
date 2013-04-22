@@ -6,7 +6,7 @@ mvmt_TS <- function(timesteps,N_fish,sex,mean_dist,gender_diff,sensitivity, doma
   likes <- matrix(NA,length(domain),timesteps)
   pos <- matrix(NA,N_fish,timesteps)
   det_pos <- matrix(NA,N_fish,timesteps)
-
+  
   # suming a linear coastline/river, the position at time t will depend on temperature (normal over domain)
   for (t in 1:timesteps)
   { cat(t,'\n')
@@ -21,7 +21,7 @@ mvmt_TS <- function(timesteps,N_fish,sex,mean_dist,gender_diff,sensitivity, doma
     
     if (t==1){
       pos[,t] <- rlnorm(N_fish,log(t*100/timesteps),1)
-    
+      
       while (any(pos[,t]>max(domain)))
       {
         pos[pos[,t]>max(domain) ,t] <- rlnorm(length(pos[pos[,t]>max(domain) ,t]),log(t*100/timesteps),1)
@@ -30,12 +30,12 @@ mvmt_TS <- function(timesteps,N_fish,sex,mean_dist,gender_diff,sensitivity, doma
       # can't properly use rbinom with a matrix, so use a workaround
       detections=matrix(rbinom(N_fish*length(seq(0,max(domain),num_receivers)),1,1-pexp(sapply(pos[,t],function(x){abs(seq(0,max(domain),num_receivers)-x)}),r)),length(seq(0,max(domain),num_receivers)),N_fish)
       det_pos[which(detections==1, arr.ind = T)[,2],t] = seq(min(domain),max(domain),num_receivers)[which(detections==1, arr.ind = T)[,1]]
-            
-      } else {
-        
-        # weighted interpolation of temp
-       likes_int<-(likes[floor(pos[,t-1])+1,t]*(pos[,t-1]-floor(pos[,t-1]))+likes[ceiling(pos[,t-1])+1,t]*(ceiling(pos[,t-1])-pos[,t-1]))/2
-       signs <- sign(maxlike-pos[,t-1])
+      
+    } else {
+      
+      # weighted interpolation of temp
+      likes_int<-(likes[floor(pos[,t-1])+1,t]*(pos[,t-1]-floor(pos[,t-1]))+likes[ceiling(pos[,t-1])+1,t]*(ceiling(pos[,t-1])-pos[,t-1]))/2
+      signs <- sign(maxlike-pos[,t-1])
       
       pos[,t] <- pos[,t-1] + rnorm(N_fish,sensitivity*(likes[maxlike,t-1]-likes_int)*signs,mean_dist+sex*gender_diff) 
       
@@ -44,8 +44,8 @@ mvmt_TS <- function(timesteps,N_fish,sex,mean_dist,gender_diff,sensitivity, doma
       { ixxs <- which(pos[,t]>max(domain) | pos[,t]<min(domain))
         pos[ixxs,t] <- pos[ixxs,t-1] + rnorm(length(ixxs),sensitivity[ixxs]*(likes[maxlike,t-1]-likes_int[ixxs])*signs[ixxs],mean_dist+gender_diff[ixxs])
       }
-     # detection only if fish swims by antenna detection radius define by a exponential distribution with rate r
-       
+      # detection only if fish swims by antenna detection radius define by a exponential distribution with rate r
+      
       # can't properly use rbinom with a matrix, so use a workaround
       detections=matrix(rbinom(N_fish*length(seq(0,max(domain),num_receivers)),1,1-pexp(sapply(pos[,t],function(x){abs(seq(0,max(domain),num_receivers)-x)}),r)),length(seq(0,max(domain),num_receivers)),N_fish)
       det_pos[which(detections==1, arr.ind = T)[,2],t] = seq(min(domain),max(domain),num_receivers)[which(detections==1, arr.ind = T)[,1]]
@@ -90,36 +90,15 @@ plot(seq(0,10,length.out=1000),exp(-r * seq(0,10,length.out=1000)),ylab='proba',
 domain = 1:100
 
 mvmt <- mvmt_TS(timesteps,N_fish,sex,mean_dist,gender_diff,sensitivity, domain,num_receivers)
- 
 
-k=5
-par(mfcol=c(1,1))
-# detected positions
-image(x=1:50-1,y=1:100,t(temp),xlab='time',ylab='position (river kilometer)')
-points(expand.grid(1:50,seq(1,100,10)))
-points(mvmt$det_pos[k,],pch=16)
-# actual positions
-lines(mvmt$pos[k,],lwd=2,col=(4-sex[k]))
 
-for (k in 1:N_fish){
-#points(mvmt$det_pos[k,],xlab='time',ylab='position')
-lines(mvmt$pos[k,],lwd=2,col=(4-sex[k]))
-}
-
-# Prepare Jags data -------------------------------
-
-require(rjags)
-
-## prepare data ---
+# Prepare data -------------------------------
 
 # we know where we tagged the fish....
 pos1 <- mvmt$pos
 pos1[,2:ncol(pos1)] <- NA
 
-# need position of temp optimum
-maxtemp <- apply(mvmt$likes,2,which.max)
-
-# need receiver psoitions normalized to 1:num_receivers
+#need receiver psoitions normalized to 1:num_receivers
 recs=10
 
 # detection positions
@@ -130,16 +109,38 @@ for (i in 1:N_fish){
   for (j in 1:timesteps){
     pos_det[(mvmt$det_pos[i,j]+9)/10,j,i] <- 1}}
 
+# need position of temp optimum
+maxtemp <- apply(mvmt$likes,2,which.max)
+
 # initial temp_optimum gradient 
 temp_grad <- matrix(NA,N_fish,timesteps)
 signs <- sign(maxtemp[1]-pos1[,1])
-tmp_pos <- mvmt$likes[round(pos1[, 1]),1]
+tmp_pos <- mvmt$likes[ceiling(pos1[, 1]),1]
 temp_grad[,1] <- signs * (1 - tmp_pos) 
 
 # use trick to make MCMC faster
 temp=mvmt$likes
 for (t in 1:timesteps){
   temp[(maxtemp[t]+1):nrow(temp),t] <- 1+(1-temp[(maxtemp[t]+1):nrow(temp),t])}
+
+# plot examples - open circles are no detections, filled cicles are detections, lines are simualted movements
+# colors show evolving temp field
+
+k=5 # fish number
+par(mfcol=c(1,1))
+# detected positions
+image(x=1:50-1,y=1:100,t(temp),xlab='time',ylab='position (river kilometer)')
+points(expand.grid(1:50,seq(1,100,10)))
+points(mvmt$det_pos[k,],pch=16)
+# actual positions
+lines(mvmt$pos[k,],lwd=2,col=(4-sex[k]))
+
+# plot movement for all simualted fish
+for (k in 1:N_fish){
+  #points(mvmt$det_pos[k,],xlab='time',ylab='position')
+  lines(mvmt$pos[k,],lwd=2,col=(4-sex[k]))
+}
+
 
 mvmt_data <- list(pos_det=pos_det,sex=sex+1,pos=pos1,N_fish=N_fish,rec_pos = seq(min(domain),max(domain),num_receivers),T=timesteps,n_rec=recs,domain=c(min(domain),max(domain)),temp=temp,temp_grad=temp_grad)
 
@@ -162,6 +163,9 @@ mvmt_inits <- list(list(
   lam=0.7,
   meansig=1))
 
+
+require(rjags)
+
 # output parameters - 'pos_det' is not output since it is HUGE with just a moderate number of timesteps and iterations
 mvmt_bugs = jags.model('Movement_model.bug',data=mvmt_data,inits=mvmt_inits,n.adapt=100)
 
@@ -170,9 +174,13 @@ params = c('pos','mu_beta','meansig','sex_diff','lam')
 mvmt_mcmc <- coda.samples(mvmt_bugs,variable.names=params,n.iter=10000,thin=10)
 
 # get chains for some parameters
+# predicted positions
 post_pos <- mvmt_mcmc[[1]][,grep('pos',colnames((mvmt_mcmc[[1]])))]
+# population temp effect
 mu_beta <- mvmt_mcmc[[1]][,grep('mu_beta',colnames((mvmt_mcmc[[1]])))]
+# sex differences in movement
 sex_diffs <- mvmt_mcmc[[1]][,grep('sex_diff',colnames((mvmt_mcmc[[1]])))]
+# detection function parameter (exponential)
 lam <- mvmt_mcmc[[1]][,grep('lam',colnames((mvmt_mcmc[[1]])))]
 
 # plot posterior distributions
